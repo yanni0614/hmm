@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>台指 HMM 即時回測</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:system-ui,sans-serif;background:#f8f8f6;color:#222;padding:16px;font-size:14px;}
+h1{font-size:16px;font-weight:500;margin-bottom:4px;}
+.sub{font-size:11px;color:#999;margin-bottom:14px;}
+#status{font-size:12px;color:#888;margin-bottom:10px;min-height:18px;}
+.ctrl-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;}
+.cl{font-size:12px;color:#666;}
+select{font-size:12px;padding:3px 6px;border:1px solid #ccc;border-radius:5px;background:#fff;}
+
+/* ── 即時建議卡 ── */
+.signal-card{background:#fff;border:1px solid #e0e0e0;border-radius:10px;padding:14px 16px;margin-bottom:14px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;}
+.sig-main{flex:1;min-width:140px;}
+.sig-label{font-size:11px;color:#999;margin-bottom:2px;}
+.sig-val{font-size:28px;font-weight:600;letter-spacing:.5px;}
+.sig-val.bull{color:#1D9E75;} .sig-val.bear{color:#D85A30;} .sig-val.cash{color:#888;}
+.sig-meta{font-size:12px;color:#666;margin-top:4px;}
+.sig-boxes{display:flex;gap:10px;flex-wrap:wrap;}
+.sig-box{background:#f4f4f2;border-radius:8px;padding:8px 12px;min-width:90px;}
+.sig-box .bl{font-size:10px;color:#999;margin-bottom:2px;}
+.sig-box .bv{font-size:16px;font-weight:500;}
+.pos-bar-wrap{width:100%;margin-top:6px;}
+.pos-bar-bg{background:#e8e8e8;border-radius:4px;height:8px;width:100%;overflow:hidden;}
+.pos-bar-fill{height:8px;border-radius:4px;transition:width .4s;}
+
+.tab-row{display:flex;border-bottom:1px solid #ddd;margin-bottom:12px;}
+.tab{font-size:13px;padding:6px 13px;cursor:pointer;border:none;background:none;color:#888;border-bottom:2px solid transparent;margin-bottom:-1px;}
+.tab.active{color:#111;border-bottom-color:#111;font-weight:500;}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:12px;}
+.metric{background:#fff;border:1px solid #eee;border-radius:8px;padding:8px 10px;}
+.ml{font-size:10px;color:#999;margin:0 0 2px;}
+.mv{font-size:16px;font-weight:500;margin:0;}
+.pos{color:#1D9E75;} .neg{color:#D85A30;} .neu{color:#222;}
+.leg{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:#777;margin-bottom:6px;}
+.dot{width:10px;height:10px;border-radius:2px;display:inline-block;margin-right:3px;vertical-align:middle;}
+.note{font-size:11px;color:#aaa;margin-top:6px;line-height:1.5;}
+.table-wrap{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th{font-weight:500;font-size:11px;color:#888;text-align:left;padding:5px 8px;border-bottom:1px solid #eee;}
+td{padding:5px 8px;border-bottom:1px solid #f2f2f2;}
+</style>
+</head>
+<body>
+<h1>台指期貨 · HMM 隱馬可夫模型 即時回測</h1>
+<p class="sub">資料來源：Google Sheets（B欄台指收盤價）· 每次開啟自動更新</p>
+<div id="status">⏳ 載入 Google Sheets 資料中...</div>
+
+<div id="app" style="display:none;">
+
+<!-- 即時建議卡 -->
+<div class="signal-card" id="signalCard">
+  <div class="sig-main">
+    <div class="sig-label">今日操作建議</div>
+    <div class="sig-val" id="sigVal">—</div>
+    <div class="sig-meta" id="sigMeta"></div>
+  </div>
+  <div class="sig-boxes">
+    <div class="sig-box">
+      <div class="bl">近期勝率</div>
+      <div class="bv" id="sbWR">—</div>
+    </div>
+    <div class="sig-box">
+      <div class="bl">建議部位</div>
+      <div class="bv" id="sbPos">—</div>
+    </div>
+    <div class="sig-box">
+      <div class="bl">市場體制</div>
+      <div class="bv" id="sbRegime">—</div>
+    </div>
+    <div class="sig-box">
+      <div class="bl">最新收盤</div>
+      <div class="bv" id="sbPrice">—</div>
+    </div>
+  </div>
+  <div class="pos-bar-wrap">
+    <div style="font-size:10px;color:#aaa;margin-bottom:3px;">部位大小（0.2 ── 1.0口）</div>
+    <div class="pos-bar-bg"><div class="pos-bar-fill" id="posBar" style="width:0%;background:#1D9E75;"></div></div>
+  </div>
+</div>
+
+<div class="ctrl-row">
+  <span class="cl">訓練窗口</span>
+  <select id="trainWin" onchange="run()">
+    <option value="60">60天</option>
+    <option value="120" selected>120天</option>
+    <option value="180">180天</option>
+  </select>
+  <span class="cl">HMM 狀態數</span>
+  <select id="nStates" onchange="run()">
+    <option value="2" selected>2狀態（多/空）</option>
+    <option value="3">3狀態（多/盤/空）</option>
+  </select>
+  <span class="cl">勝率窗口</span>
+  <select id="wrWin" onchange="run()">
+    <option value="20">20天</option>
+    <option value="40" selected>40天</option>
+    <option value="60">60天</option>
+  </select>
+</div>
+
+<div class="tab-row">
+  <button class="tab active" onclick="showTab('equity')">累積損益</button>
+  <button class="tab" onclick="showTab('regime')">市場體制</button>
+  <button class="tab" onclick="showTab('pos')">部位大小</button>
+  <button class="tab" onclick="showTab('stats')">績效統計</button>
+</div>
+
+<div id="tab-equity">
+  <div class="metric-grid" id="mTop"></div>
+  <div class="leg">
+    <span><span class="dot" style="background:#378ADD;"></span>買進持有</span>
+    <span><span class="dot" style="background:#1D9E75;"></span>HMM 動態部位</span>
+  </div>
+  <div style="position:relative;width:100%;height:250px;"><canvas id="eqChart"></canvas></div>
+  <p class="note">* 每點 200 元（小台）。空頭體制持現金。滑價/手續費未計入。</p>
+</div>
+
+<div id="tab-regime" style="display:none;">
+  <div class="leg">
+    <span><span class="dot" style="background:#378ADD;"></span>多頭</span>
+    <span><span class="dot" style="background:#E24B4A;"></span>空頭</span>
+  </div>
+  <div style="position:relative;width:100%;height:200px;"><canvas id="regChart"></canvas></div>
+  <div class="metric-grid" id="regStats" style="margin-top:12px;"></div>
+  <p style="font-size:11px;color:#aaa;margin:6px 0 4px;">20日滾動年化波動率</p>
+  <div style="position:relative;width:100%;height:155px;"><canvas id="volChart"></canvas></div>
+</div>
+
+<div id="tab-pos" style="display:none;">
+  <div class="leg">
+    <span><span class="dot" style="background:#7F77DD;"></span>部位大小（口，0.2–1.0）</span>
+    <span><span class="dot" style="background:#BA7517;width:10px;height:3px;border-radius:0;"></span>滾動勝率（右軸）</span>
+  </div>
+  <div style="position:relative;width:100%;height:250px;"><canvas id="posChart"></canvas></div>
+  <p class="note">部位 = clip(勝率×2−0.6, 0.2, 1.0)；空頭體制強制歸零。</p>
+</div>
+
+<div id="tab-stats" style="display:none;">
+  <div class="metric-grid" id="tradeMetrics"></div>
+  <div class="table-wrap">
+    <table id="tradeTable">
+      <thead><tr><th>指標</th><th>買進持有</th><th>HMM 策略</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+</div><!-- #app -->
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+var GAS_URL = 'https://script.google.com/macros/s/AKfycbw1m8eOgereXIO8CXzDKWV39MthioeaDKwURhCCLnGRbkj-KWZZUrHYyf4P9eqNQ24k/exec';
+var prices=[], dates=[], rets=[];
+var charts={};
+
+// ── 1. 取得 Google Sheets 資料 ──────────────────────────────
+function loadData(){
+  document.getElementById('status').textContent='⏳ 連線 Google Sheets...';
+  fetch(GAS_URL)
+    .then(function(r){
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.json();
+    })
+    .then(function(json){
+      // 支援多種回傳格式：
+      // [{date:'20230101',close:14500}, ...] 或 [[date,close], ...]
+      // 或直接回傳 {values:[[row],[row],...]}（Apps Script 常見格式）
+      var rows=[];
+      if(Array.isArray(json)){
+        rows=json;
+      } else if(json.values){
+        rows=json.values;
+      } else if(json.data){
+        rows=json.data;
+      }
+
+      prices=[]; dates=[];
+      rows.forEach(function(row){
+        var d,p;
+        if(Array.isArray(row)){
+          d=String(row[0]); p=parseFloat(row[1]);
+        } else {
+          // object
+          d=String(row.date||row.Date||row['日期']||row[Object.keys(row)[0]]);
+          p=parseFloat(row.close||row.Close||row['台指']||row[Object.keys(row)[1]]);
+        }
+        // 過濾標題列與無效資料
+        if(!isNaN(p) && p>0 && d && !/日期|date/i.test(d)){
+          // 格式化日期（去掉斜線/破折號）
+          d=d.replace(/[\/\-]/g,'');
+          dates.push(d); prices.push(p);
+        }
+      });
+
+      if(prices.length<30){
+        throw new Error('有效資料列數不足（共'+prices.length+'筆），請確認 B 欄格式');
+      }
+
+      rets=[];
+      for(var i=1;i<prices.length;i++) rets.push((prices[i]-prices[i-1])/prices[i-1]);
+
+      document.getElementById('status').textContent=
+        '✅ 已載入 '+prices.length+' 筆資料（'+dates[0]+' → '+dates[dates.length-1]+'）';
+      document.getElementById('app').style.display='block';
+      run();
+    })
+    .catch(function(err){
+      document.getElementById('status').innerHTML=
+        '❌ 載入失敗：'+err.message+'<br><span style="font-size:11px;color:#aaa;">請確認 Apps Script 已部署為「任何人」可存取，且 B 欄為台指收盤價數字。</span>';
+    });
+}
+
+// ── 2. HMM Viterbi ──────────────────────────────────────────
+function hmmViterbi(retSlice,nStates){
+  var n=retSlice.length;
+  if(n<10) return {seq:new Array(n).fill(0),mean:[0],variance:[1]};
+  var sorted=retSlice.slice().sort(function(a,b){return a-b;});
+  var mean=[],variance=[];
+  for(var s=0;s<nStates;s++){
+    var st=Math.floor(s*n/nStates),en=Math.floor((s+1)*n/nStates);
+    var sl=sorted.slice(st,en);
+    var m=sl.reduce(function(a,b){return a+b;},0)/sl.length;
+    var v=sl.reduce(function(a,b){return a+(b-m)*(b-m);},0)/sl.length;
+    mean.push(m); variance.push(Math.max(v,1e-7));
+  }
+  function gauss(x,m,v){return Math.exp(-(x-m)*(x-m)/(2*v))/Math.sqrt(2*Math.PI*v);}
+  var trans=[];
+  for(var i=0;i<nStates;i++){var r=[];for(var j=0;j<nStates;j++)r.push(i===j?0.92:0.08/(nStates-1));trans.push(r);}
+  var vit=[];
+  for(var s=0;s<nStates;s++) vit.push([Math.log(gauss(retSlice[0],mean[s],variance[s])+1e-300)]);
+  var path=[];
+  for(var s=0;s<nStates;s++) path.push([s]);
+  for(var t=1;t<n;t++){
+    var nv=[],np=[];
+    for(var s=0;s<nStates;s++){nv.push(-Infinity);np.push(0);}
+    for(var s=0;s<nStates;s++){
+      for(var prev=0;prev<nStates;prev++){
+        var sc=vit[prev][t-1]+Math.log(trans[prev][s]+1e-300)+Math.log(gauss(retSlice[t],mean[s],variance[s])+1e-300);
+        if(sc>nv[s]){nv[s]=sc;np[s]=prev;}
+      }
+    }
+    for(var s=0;s<nStates;s++) vit[s].push(nv[s]);
+    path=path.map(function(p,s){return p.concat([np[s]]);});
+  }
+  var best=0;
+  for(var s=1;s<nStates;s++) if(vit[s][n-1]>vit[best][n-1]) best=s;
+  var seq=new Array(n); seq[n-1]=best;
+  for(var t=n-2;t>=0;t--) seq[t]=path[seq[t+1]][t+1];
+  return {seq:seq,mean:mean,variance:variance};
+}
+
+function dc(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
+
+// ── 3. 主回測 ────────────────────────────────────────────────
+function run(){
+  var trainWin=+document.getElementById('trainWin').value;
+  var nStates=+document.getElementById('nStates').value;
+  var wrWin=+document.getElementById('wrWin').value;
+  var N=rets.length;
+
+  var isBearArr=new Array(N).fill(false);
+  for(var i=trainWin;i<N;i++){
+    var slice=rets.slice(Math.max(0,i-trainWin),i);
+    var hmm=hmmViterbi(slice,nStates);
+    var lastState=hmm.seq[hmm.seq.length-1];
+    var bearIdx=0;
+    for(var s=1;s<nStates;s++) if(hmm.variance[s]>hmm.variance[bearIdx]) bearIdx=s;
+    isBearArr[i]=(lastState===bearIdx);
+  }
+
+  var wrArr=new Array(N).fill(0.5);
+  var posArr=new Array(N).fill(0);
+  for(var i=wrWin;i<N;i++){
+    var wins=0,total=0;
+    for(var j=i-wrWin;j<i;j++){
+      if(!isBearArr[j]){total++;if(rets[j]>0)wins++;}
+    }
+    wrArr[i]=total>0?wins/total:0.5;
+    posArr[i]=isBearArr[i]?0:Math.min(1.0,Math.max(0.2,wrArr[i]*2-0.6));
+  }
+
+  // ── 即時建議卡 ──
+  var latestBear=isBearArr[N-1];
+  var latestWR=wrArr[N-1];
+  var latestPos=posArr[N-1];
+  var latestPrice=prices[prices.length-1];
+  var latestDate=dates[dates.length-1];
+
+  var sigEl=document.getElementById('sigVal');
+  var sigMeta=document.getElementById('sigMeta');
+  if(latestBear){
+    sigEl.textContent='持現金 📴'; sigEl.className='sig-val cash';
+    sigMeta.textContent='HMM 偵測高波動空頭體制，建議退場觀望';
+  } else {
+    if(latestPos>=0.8){
+      sigEl.textContent='積極做多 🟢'; sigEl.className='sig-val bull';
+    } else if(latestPos>=0.5){
+      sigEl.textContent='適量做多 🔵'; sigEl.className='sig-val bull';
+    } else {
+      sigEl.textContent='小量做多 🟡'; sigEl.className='sig-val bull';
+    }
+    sigMeta.textContent='低波動多頭體制，勝率偏高，依部位公式建議持倉';
+  }
+  document.getElementById('sbWR').textContent=(latestWR*100).toFixed(1)+'%';
+  document.getElementById('sbPos').textContent=latestBear?'0口':latestPos.toFixed(2)+'口';
+  document.getElementById('sbRegime').textContent=latestBear?'空頭 🔴':'多頭 🟢';
+  document.getElementById('sbPrice').textContent=latestPrice.toLocaleString();
+  document.getElementById('sigMeta').textContent+='\xa0\xa0（'+latestDate+'）';
+  var barPct=latestBear?0:((latestPos-0.2)/0.8*100);
+  var barEl=document.getElementById('posBar');
+  barEl.style.width=barPct+'%';
+  barEl.style.background=latestBear?'#aaa':(latestPos>=0.7?'#1D9E75':'#378ADD');
+
+  // ── 回測 ──
+  var TICK=200;
+  var bhPnl=[0],hmPnl=[0],bhT=[],hmT=[];
+  for(var i=0;i<N;i++){
+    var dp=prices[i+1]-prices[i];
+    bhPnl.push(bhPnl[bhPnl.length-1]+dp*TICK);
+    var pos=i<trainWin?0:posArr[i];
+    hmPnl.push(hmPnl[hmPnl.length-1]+dp*TICK*pos);
+    if(i>=trainWin){
+      bhT.push({pnl:dp*TICK,pos:1});
+      hmT.push({pnl:dp*TICK*pos,pos:pos});
+    }
+  }
+
+  var bhF=bhPnl[bhPnl.length-1],hmF=hmPnl[hmPnl.length-1];
+  var bhMx=0,bhDD=0,hmMx=0,hmDD=0;
+  bhPnl.forEach(function(v){if(v>bhMx)bhMx=v;if(v-bhMx<bhDD)bhDD=v-bhMx;});
+  hmPnl.forEach(function(v){if(v>hmMx)hmMx=v;if(v-hmMx<hmDD)hmDD=v-hmMx;});
+
+  function sharpe(ts){
+    var ps=ts.map(function(t){return t.pnl;});
+    var m=ps.reduce(function(a,b){return a+b;},0)/ps.length;
+    var s=Math.sqrt(ps.reduce(function(a,b){return a+(b-m)*(b-m);},0)/ps.length);
+    return s>0?m/s*Math.sqrt(252):0;
+  }
+  function wr(ts){var act=ts.filter(function(t){return t.pos>0;});return act.length?act.filter(function(t){return t.pnl>0;}).length/act.length:0;}
+  function avgW(ts){var w=ts.filter(function(t){return t.pnl>0&&t.pos>0;});return w.length?w.reduce(function(a,t){return a+t.pnl;},0)/w.length:0;}
+  function avgL(ts){var l=ts.filter(function(t){return t.pnl<0&&t.pos>0;});return l.length?l.reduce(function(a,t){return a+t.pnl;},0)/l.length:0;}
+  function calmar(f,dd){return dd<0?f/Math.abs(dd):0;}
+  var bearDays=isBearArr.slice(trainWin).filter(Boolean).length;
+
+  document.getElementById('mTop').innerHTML=[
+    {l:'HMM 總損益',v:(hmF>=0?'+':'')+Math.round(hmF/10000)+'萬',c:hmF>=0?'pos':'neg'},
+    {l:'買進持有',v:(bhF>=0?'+':'')+Math.round(bhF/10000)+'萬',c:bhF>=0?'pos':'neg'},
+    {l:'超額損益',v:(hmF-bhF>=0?'+':'')+Math.round((hmF-bhF)/10000)+'萬',c:hmF>=bhF?'pos':'neg'},
+    {l:'HMM Sharpe',v:sharpe(hmT).toFixed(2),c:'neu'},
+    {l:'B&H Sharpe',v:sharpe(bhT).toFixed(2),c:'neu'},
+    {l:'HMM 最大回撤',v:Math.round(hmDD/10000)+'萬',c:'neg'},
+    {l:'B&H 最大回撤',v:Math.round(bhDD/10000)+'萬',c:'neg'},
+    {l:'HMM 勝率',v:(wr(hmT)*100).toFixed(1)+'%',c:'neu'},
+  ].map(function(m){return '<div class="metric"><p class="ml">'+m.l+'</p><p class="mv '+m.c+'">'+m.v+'</p></div>';}).join('');
+
+  var step=Math.max(1,Math.ceil(N/280));
+  var tD=[],tBH=[],tHM=[],tSt=[],tPos=[],tWR=[],tVol=[];
+  for(var i=0;i<N;i+=step){
+    tD.push(dates[i]);
+    tBH.push(+(bhPnl[i+1]/10000).toFixed(2));
+    tHM.push(+(hmPnl[i+1]/10000).toFixed(2));
+    tSt.push(isBearArr[i]?-1:1);
+    tPos.push(+posArr[i].toFixed(2));
+    tWR.push(+(wrArr[i]*100).toFixed(1));
+    var vs=rets.slice(Math.max(0,i-20),i+1);
+    var vm=vs.reduce(function(a,b){return a+b;},0)/vs.length;
+    tVol.push(+(Math.sqrt(vs.reduce(function(a,b){return a+(b-vm)*(b-vm);},0)/vs.length)*Math.sqrt(252)*100).toFixed(1));
+  }
+
+  var co={responsive:true,maintainAspectRatio:false};
+
+  dc('eqChart');
+  charts['eqChart']=new Chart(document.getElementById('eqChart'),{type:'line',data:{labels:tD,datasets:[
+    {label:'買進持有',data:tBH,borderColor:'#378ADD',backgroundColor:'rgba(55,138,221,0.07)',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3},
+    {label:'HMM',data:tHM,borderColor:'#1D9E75',backgroundColor:'rgba(29,158,117,0.07)',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3}
+  ]},options:{...co,plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,callbacks:{label:function(c){return c.dataset.label+': '+c.parsed.y.toFixed(1)+'萬'}}}},scales:{x:{ticks:{maxTicksLimit:10,color:'#aaa',font:{size:10}},grid:{display:false}},y:{ticks:{callback:function(v){return v+'萬'},color:'#aaa',font:{size:10}},grid:{color:'rgba(0,0,0,0.05)'}}}}});
+
+  document.getElementById('regStats').innerHTML=[
+    {l:'多頭天數',v:(N-trainWin-bearDays)+'天'},
+    {l:'空頭天數',v:bearDays+'天'},
+    {l:'空頭比例',v:(bearDays/(N-trainWin)*100).toFixed(1)+'%'},
+  ].map(function(m){return '<div class="metric"><p class="ml">'+m.l+'</p><p class="mv neu">'+m.v+'</p></div>';}).join('');
+
+  dc('regChart');
+  charts['regChart']=new Chart(document.getElementById('regChart'),{type:'bar',data:{labels:tD,datasets:[{label:'體制',data:tSt,backgroundColor:tSt.map(function(s){return s>0?'rgba(55,138,221,0.65)':'rgba(226,75,74,0.65)';}),borderWidth:0,barPercentage:1.0,categoryPercentage:1.0}]},options:{...co,plugins:{legend:{display:false},tooltip:{callbacks:{label:function(c){return c.parsed.y>0?'多頭':'空頭';}}}},scales:{x:{ticks:{maxTicksLimit:10,color:'#aaa',font:{size:10}},grid:{display:false}},y:{min:-1.5,max:1.5,ticks:{callback:function(v){return v>0?'多頭':v<0?'空頭':'';},color:'#aaa',font:{size:10}},grid:{display:false}}}}});
+
+  dc('volChart');
+  charts['volChart']=new Chart(document.getElementById('volChart'),{type:'line',data:{labels:tD,datasets:[{label:'波動率',data:tVol,borderColor:'#D85A30',backgroundColor:'rgba(216,90,48,0.07)',borderWidth:1.2,pointRadius:0,fill:true,tension:0.3}]},options:{...co,plugins:{legend:{display:false}},scales:{x:{ticks:{maxTicksLimit:10,color:'#aaa',font:{size:10}},grid:{display:false}},y:{ticks:{callback:function(v){return v.toFixed(0)+'%'},color:'#aaa',font:{size:10}},grid:{color:'rgba(0,0,0,0.05)'}}}}});
+
+  dc('posChart');
+  charts['posChart']=new Chart(document.getElementById('posChart'),{type:'line',data:{labels:tD,datasets:[
+    {label:'部位',data:tPos,borderColor:'#7F77DD',backgroundColor:'rgba(127,119,221,0.09)',borderWidth:1.5,pointRadius:0,fill:true,tension:0.3,yAxisID:'y'},
+    {label:'勝率%',data:tWR,borderColor:'#BA7517',backgroundColor:'transparent',borderWidth:1.2,pointRadius:0,fill:false,tension:0.3,yAxisID:'y2',borderDash:[4,3]}
+  ]},options:{...co,plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false}},scales:{x:{ticks:{maxTicksLimit:10,color:'#aaa',font:{size:10}},grid:{display:false}},y:{min:0,max:1.1,ticks:{callback:function(v){return v.toFixed(1)+'口'},color:'#7F77DD',font:{size:10}},grid:{color:'rgba(0,0,0,0.05)'}},y2:{position:'right',min:30,max:80,ticks:{callback:function(v){return v+'%'},color:'#BA7517',font:{size:10}},grid:{display:false}}}}});
+
+  var tb=document.querySelector('#tradeTable tbody');
+  tb.innerHTML=[
+    ['總損益（萬元）',Math.round(bhF/10000),Math.round(hmF/10000),true],
+    ['Sharpe 比率',sharpe(bhT).toFixed(2),sharpe(hmT).toFixed(2),true],
+    ['Calmar 比率',calmar(bhF,bhDD).toFixed(2),calmar(hmF,hmDD).toFixed(2),true],
+    ['最大回撤（萬元）',Math.round(bhDD/10000),Math.round(hmDD/10000),false],
+    ['勝率',(bhT.filter(function(t){return t.pnl>0;}).length/bhT.length*100).toFixed(1)+'%',(wr(hmT)*100).toFixed(1)+'%',false],
+    ['平均獲利日（元）',Math.round(avgW(bhT.map(function(t){return {pnl:t.pnl,pos:1};}))),Math.round(avgW(hmT)),true],
+    ['平均虧損日（元）',Math.round(avgL(bhT.map(function(t){return {pnl:t.pnl,pos:1};}))),Math.round(avgL(hmT)),false],
+    ['空頭退場天數',0,bearDays,false],
+  ].map(function(r){
+    var bv=r[1],hv=r[2],higher=r[3];
+    var cls='';
+    if(typeof hv==='number'&&typeof bv==='number') cls=(higher?(hv>bv):(Math.abs(hv)<Math.abs(bv)))?'pos':'neg';
+    return '<tr><td>'+r[0]+'</td><td>'+bv+'</td><td class="'+cls+'">'+hv+'</td></tr>';
+  }).join('');
+}
+
+function showTab(name){
+  ['equity','regime','pos','stats'].forEach(function(t){
+    document.getElementById('tab-'+t).style.display=(t===name)?'block':'none';
+  });
+  document.querySelectorAll('.tab').forEach(function(el,i){
+    el.classList.toggle('active',['equity','regime','pos','stats'][i]===name);
+  });
+}
+
+loadData();
+</script>
+</body>
+</html>
